@@ -29,6 +29,12 @@ const turn = (number: number, prompt: string, complete = true) => ({
   usage: complete ? usage : { ...usage, calls: 0 },
   subagents: null,
   tools: complete ? 'Bash ×2, Read' : '',
+  steps: complete
+    ? [
+        { context: number * 10000 + 400, output: 100, tools: ['Bash', 'Bash'] },
+        { context: number * 10000 + 1700, output: 200, tools: ['Read'] },
+      ]
+    : [],
 })
 
 const DATA = {
@@ -169,4 +175,44 @@ test('the highlight stays on the list, and every row is there to move to', async
   const closeMark = await $.ui.focus({ component: 'Pane', requestId: PANE, origin: { kind: 'person' } } as any)
   expect(closeMark.deny).toBeDefined()
   await ui.unmount()
+})
+
+test('the details have tabs: overview, tokens, context, calls and session', async ($, on) => {
+  engine(on, { data: { ...DATA, turns: [turn(1, 'hi hi'), turn(2, 'second prompt'), turn(3, 'third prompt', false)] } })
+  on('ui.focus', () => ({}))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mount($, surface, 140, 40)
+    await ui.press({ key: 'refresh' })
+    await ui.press({ key: 'row:1' })
+    const details = async () => (await ui.find({ key: 'details' }))?.text ?? ''
+    expect(await details()).toContain('total sent') // overview first
+
+    await ui.press({ key: 'tab:tokens' })
+    expect(await details()).toContain('hi␣hi')
+    expect(await details()).toContain('longest tokens')
+
+    await ui.press({ key: 'tab:context' })
+    expect(await details()).toContain('sent with this prompt')
+    expect(await details()).toContain('+ while working')
+
+    await ui.press({ key: 'tab:calls' })
+    expect(await details()).toContain('2 API calls')
+    expect(await details()).toContain('Bash ×2')
+
+    // The tab stays as you move to another prompt.
+    await ui.press({ key: 'row:2' })
+    expect(await details()).toContain('2 API calls')
+
+    await ui.press({ key: 'tab:session' })
+    expect(await details()).toContain('3 prompts')
+    expect(await details()).toContain('biggest turn')
+
+    // A running turn says so instead of numbers.
+    await ui.press({ key: 'row:3' })
+    await ui.press({ key: 'tab:calls' })
+    expect(await details()).toContain('still running')
+
+    await ui.press({ key: 'tab:overview' })
+    await ui.unmount()
+  }
 })

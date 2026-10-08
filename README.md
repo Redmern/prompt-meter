@@ -17,6 +17,8 @@ Add␣a␣retry␣with␣exponential␣backoff␣to␣the␣upload␣client
    9  now write tests for it                             6  +14.8k
   ↓ 3 more
 
+1: overview  2: tokens 12  3: context  4: calls 9  5: session
+━━━━━━━━━━━──────────────────────────────────────────────────
 prompt 8 of 12 · 14:02
 │ add a retry with backoff to the upload client
 add␣a␣retry␣with␣backoff␣to␣the␣upload␣client
@@ -33,7 +35,7 @@ add␣a␣retry␣with␣backoff␣to␣the␣upload␣client
                         ● cache read 1.49M ● cache write 31k ● uncached 18
   output:        12.4k  ████████████
                         ● thinking 7.9k ● text & tool calls 4.5k
-↑↓ pick · esc to type (pane stays)  r: refresh  q: close
+↑↓ pick · 1-5 tabs · esc to type (pane stays)  r: refresh  q: close
 ```
 
 ## Install
@@ -50,16 +52,24 @@ Claude Code **2.1.294 or newer** for the `/pm` pane. Nothing to `npm install`.
 
 ## What you get
 
-**`/pm`: the prompt pane.** Lists this session's prompts. Pick one to see:
+**`/pm`: the prompt pane.** Lists this session's prompts. Pick one, then pick
+a tab with its number:
 
-- its text and how it splits into tokens, as colored chips (`🎉×3` is one
-  character that costs 3 tokens);
-- **total sent**: how much the context grew when you sent it, split into the
-  prompt, hook output, reminders and the rest;
-- **context**: before, growth while Claude worked, and after, against your
-  context window;
-- **input / output**: what the API processed (cache read, cache write,
-  uncached) and produced (thinking, text and tool calls), plus the tools used.
+1. **overview**: its text and token chips (`🎉×3` is one character that costs
+   3 tokens), what it added to the context, the context before and after, and
+   the input and output tokens of the turn.
+2. **tokens**: the whole token split, the characters that cost several tokens,
+   the longest tokens, and how many are whitespace.
+3. **context**: every part that went in with the prompt (the prompt, hook
+   output, reminders, the rest) with a bar each, then the context window
+   before, while Claude worked, and after.
+4. **calls**: each API call of the turn: the context it read, what came in
+   before it (the prompt, or tool results), its output and the tools it used.
+5. **session**: the whole session: context after each prompt as a sparkline
+   (a drop is a compaction), total input and output, subagents, and the
+   prompts that stood out.
+
+The tab stays as you move through the prompts.
 
 While the pane is open, whatever you type in the prompt box is split into
 tokens live in the **typing** line, with how far it would move the context.
@@ -67,6 +77,7 @@ tokens live in the **typing** line, with how far it would move the context.
 | Key | Does |
 | --- | --- |
 | `↑` `↓` | pick a prompt |
+| `1` … `5` | switch tabs |
 | `Esc` | back to the prompt box (the pane stays open and shows what you type) |
 | `ctrl+x` `tab` | back into the list (a click doesn't give the pane the keys) |
 | `r` | refresh |

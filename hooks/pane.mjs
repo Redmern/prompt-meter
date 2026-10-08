@@ -5,16 +5,16 @@
 // lib/bpe.mjs, a pure-JS copy of the tokenizer.
 import { atom, read, update } from 'claude-code'
 import { createTokenizer } from '../lib/bpe.mjs'
+import { chipRows, tabBar, tokenFacts, visible } from '../lib/ui.mjs'
 
 const PANE = 'prompt-meter'
 const ROW = 'row:'
 const RANKS = 'vendor/claude-tokenizer.json'
-// Token chip backgrounds, cycled. Muted enough for light text on either theme.
-const CHIPS = ['#3b5b8c', '#6d4a8c', '#2f7560', '#86672a', '#8c3f55']
-const CHIP_TEXT = '#f4f4f4'
 
 // Number of the highlighted prompt. 0 means the newest one.
 const selected = atom({ plugin: 'prompt-meter', key: 'selected' }, 0)
+// Which tab the details show; it stays as you move through the prompts.
+const tab = atom({ plugin: 'prompt-meter', key: 'tab' }, 'overview')
 
 let data // pane-data.mjs output: { window, command, contextNow, turns }
 let failure // why the last load failed
@@ -79,7 +79,6 @@ function fmt(n) {
 
 const signed = n => (n >= 0 ? '+' : '-') + fmt(Math.abs(n))
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
-const visible = s => s.replaceAll(' ', '␣').replaceAll('\n', '↵').replaceAll('\t', '⇥')
 
 function pct(fraction) {
   const p = fraction * 100
@@ -137,48 +136,6 @@ function gauge(Text, before, after, window, width) {
     h(Text, { color: 'warning' }, '█'.repeat(a - b)),
     h(Text, { color: 'subtle' }, '░'.repeat(width - a)),
   ]
-}
-
-// Lays the token pieces out as colored chips, at most maxRows rows of width
-// cells. What doesn't fit becomes "+N more" at the end of the last row.
-function chipRows(Text, pieces, width, maxRows) {
-  const rows = [[]]
-  let used = 0
-  let hidden = 0
-  pieces.forEach((piece, i) => {
-    if (hidden) {
-      hidden += piece.tokens
-      return
-    }
-    let label = visible(piece.text) + (piece.tokens > 1 ? `×${piece.tokens}` : '')
-    if (label.length > width) label = label.slice(0, width - 1) + '…'
-    if (used + label.length > width) {
-      if (rows.length === maxRows) {
-        hidden += piece.tokens
-        return
-      }
-      rows.push([])
-      used = 0
-    }
-    rows.at(-1).push({ label, color: CHIPS[i % CHIPS.length], tokens: piece.tokens })
-    used += label.length
-  })
-  if (hidden) {
-    const last = rows.at(-1)
-    while (last.length && used + ` +${hidden} more`.length > width) {
-      const chip = last.pop()
-      hidden += chip.tokens
-      used -= chip.label.length
-    }
-  }
-  return rows.map((row, r) =>
-    h(
-      Text,
-      { wrap: 'truncate-end' },
-      ...row.map(chip => h(Text, { backgroundColor: chip.color, color: CHIP_TEXT }, chip.label)),
-      ...(hidden && r === rows.length - 1 ? [h(Text, { color: 'subtle' }, ` +${hidden} more`)] : []),
-    ),
-  )
 }
 
 // Keeps the lines that fit in budget rows, dropping the highest ranks first.
@@ -293,10 +250,31 @@ function statRow(Text, layout, { label, value, valueColor, strong, bars, after }
   )
 }
 
-// Rows the details take at most; a stacked layout keeps this much for them.
-const DETAIL_ROWS = 21
+// Rows the details take at most, tab bar included; a stacked layout keeps this
+// much for them.
+const DETAIL_ROWS = 23
 
-function details(Text, turn, total, window, width, budget) {
+function heading(Text, title, width) {
+  return h(Text, { wrap: 'truncate-end' }, h(Text, { bold: true, color: 'claude' }, title), h(Text, { color: 'subtle' }, ` ${'─'.repeat(Math.max(0, width - title.length - 1))}`))
+}
+
+function toolSummary(tools) {
+  const counts = new Map()
+  for (const name of tools) {
+    const short = name.replace(/^mcp__/, '').replace('__', ':')
+    counts.set(short, (counts.get(short) ?? 0) + 1)
+  }
+  return [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(', ')
+}
+
+const running = Text => h(Text, { color: 'warning' }, '  ◌ still running: the numbers fill in when the turn ends')
+
+// ── tabs ─────────────────────────────────────────────────────────────────────
+// Each tab takes the prompt (or the session) and the rows it may fill, and
+// drops its least important lines first (`fit`), so the pane never overflows.
+
+// 1 overview: the prompt and its key numbers.
+function overviewTab(Text, turn, total, window, width, budget) {
   const lines = []
   const add = (rank, node) => lines.push({ rank, node })
   const blank = rank => add(rank, h(Text, null, ' '))
@@ -370,6 +348,196 @@ function details(Text, turn, total, window, width, budget) {
   }
   return fit(lines, budget)
 }
+
+// 2 tokens: the whole split, and what stands out in it.
+function tokensTab(Text, turn, total, width, budget) {
+  const pieces = split(turn.prompt)
+  const chars = turn.chars
+  const lines = []
+  const add = (rank, node) => lines.push({ rank, node })
+  add(0, h(Text, { wrap: 'truncate-end' }, h(Text, { bold: true }, `prompt ${turn.number} of ${total}`), h(Text, { color: 'subtle' }, ` · ${plural(turn.promptTokens, 'token')} · ${chars} chars · ${(chars / Math.max(turn.promptTokens, 1)).toFixed(1)} chars/token`)))
+  if (!pieces.length) {
+    add(0, h(Text, { color: 'warning' }, '  no token split: vendor/claude-tokenizer.json is missing'))
+    return fit(lines, budget)
+  }
+  chipRows(Text, pieces, width, Math.max(2, budget - 6)).forEach(row => add(0.5, row))
+  if (chars > turn.prompt.length) add(1, h(Text, { color: 'subtle' }, `  split shows the first ${turn.prompt.length} of ${chars} chars`))
+  add(9, h(Text, null, ' '))
+  const facts = tokenFacts(pieces)
+  const fact = (rank, label, value) =>
+    add(rank, h(Text, { wrap: 'truncate-end' }, h(Text, { color: 'subtle' }, `  ${`${label}:`.padEnd(20)}`), ...value))
+  if (facts.multi.length) {
+    fact(2, 'several per char', facts.multi.map(p => h(Text, { bold: true }, `${visible(p.text)}×${p.tokens}  `)))
+  }
+  fact(3, 'longest tokens', facts.longest.map(p => h(Text, null, h(Text, { bold: true }, visible(p.text)), h(Text, { color: 'subtle' }, ` ${[...p.text].length}  `))))
+  fact(4, 'whitespace', [h(Text, null, plural(facts.whitespace, 'token')), h(Text, { color: 'subtle' }, ' of spaces and line breaks')])
+  add(5, h(Text, { color: 'subtle', wrap: 'truncate-end' }, '  split with the public Claude tokenizer (older models): current models count a little differently'))
+  return fit(lines, budget)
+}
+
+// 3 context: everything that went in with the prompt, and the window around it.
+function contextTab(Text, turn, window, width, budget) {
+  if (!turn.complete) return [running(Text)]
+  const lines = []
+  const add = (rank, node) => lines.push({ rank, node })
+  // Part rows draw "● label:", so the column fits the longest label plus three.
+  const longest = Math.max(16, ...turn.parts.map(p => p.label.length + 3))
+  const layout = { label: Math.min(longest, 30, width - 40), value: 8, bar: 0 }
+  layout.bar = Math.min(20, Math.max(6, width - 2 - layout.label - layout.value - 2 - 18))
+  const note = text => h(Text, { color: 'subtle' }, `  ${text}`)
+  const row = (rank, fields) => add(rank, statRow(Text, layout, fields))
+
+  add(1, heading(Text, turn.before === 0 ? 'loaded with the first prompt' : 'sent with this prompt', width))
+  if (turn.added < 0) {
+    row(0, { label: 'total sent', value: signed(turn.added), strong: true, after: [note('context shrank: compacted or cleared before this prompt')] })
+  } else {
+    const parts = turn.parts.map((p, i) => ({ ...p, color: /^(other|system prompt)/.test(p.label) ? 'inactive' : PART_COLORS[i % PART_COLORS.length] }))
+    const scale = Math.max(turn.added, parts.reduce((sum, p) => sum + p.tokens, 0), 1)
+    parts.forEach((p, i) =>
+      add(
+        i === 0 ? 2 : 4,
+        h(
+          Text,
+          { wrap: 'truncate-end' },
+          h(Text, { color: p.color }, '  ● '),
+          h(Text, { color: 'subtle' }, clip(`${p.label}:`, layout.label - 2)),
+          h(Text, { bold: true }, `~${fmt(p.tokens)}`.padStart(layout.value)),
+          h(Text, null, '  '),
+          ...bar(Text, p.tokens / scale, layout.bar, p.color),
+        ),
+      ),
+    )
+    row(0, { label: 'total sent', value: fmt(turn.added), strong: true, bars: stackedBar(Text, parts, layout.bar), after: [note(`${pct(turn.added / window)} of ${fmt(window)} · parts estimated, total measured`)] })
+  }
+  add(9, h(Text, null, ' '))
+
+  const start = turn.before + turn.prevOutput
+  const grew = turn.atEnd - start
+  add(1, heading(Text, 'context window', width))
+  row(3, { label: 'before', value: fmt(start), bars: bar(Text, start / window, layout.bar, 'suggestion'), after: [note(`${pct(start / window)} full`)] })
+  row(5, { label: '+ sent', value: signed(turn.added), valueColor: growthColor(turn.added / window) })
+  row(2.5, { label: '+ while working', value: signed(turn.duringTurn), valueColor: growthColor(turn.duringTurn / window), after: [note(plural(turn.usage.calls, 'API call'))] })
+  row(0, { label: 'after', value: fmt(turn.atEnd), strong: true, bars: gauge(Text, start, turn.atEnd, window, layout.bar), after: [note(`${pct(turn.atEnd / window)} full`)] })
+  row(1.5, { label: 'this turn', value: signed(grew), valueColor: growthColor(grew / window), after: [note(`${pct(grew / window)} of ${fmt(window)}`)] })
+  add(9, h(Text, null, ' '))
+  const calls = turn.usage.calls
+  add(6, h(Text, { color: 'subtle', wrap: 'truncate-end' }, `  every call re-reads the whole context: ${plural(calls, 'call')} × ~${fmt(turn.usage.input / Math.max(calls, 1))} = ${fmt(turn.usage.input)} input`))
+  return fit(lines, budget)
+}
+
+// 4 calls: each API call of the turn, what it added and which tools it used.
+function callsTab(Text, turn, window, width, budget) {
+  if (!turn.complete) return [running(Text)]
+  const steps = turn.steps ?? []
+  const lines = [
+    h(Text, { wrap: 'truncate-end' }, h(Text, { bold: true }, plural(steps.length, 'API call')), h(Text, { color: 'subtle' }, turn.tools ? ` · ${turn.tools}` : ' · replies only')),
+    h(Text, { color: 'subtle' }, `  ${'#'.padStart(3)}  ${'context'.padStart(8)}  ${'added'.padStart(7)}  ${'out'.padStart(6)}  tools`),
+  ]
+  // What came in before each call: the prompt (first call), else the last
+  // call's reply and the tool results it led to.
+  const added = steps.map((step, i) => step.context - (i ? steps[i - 1].context + steps[i - 1].output : turn.before + turn.prevOutput))
+  const room = Math.max(1, budget - lines.length - 1)
+  const shown = steps.length > room ? room : steps.length
+  for (let i = 0; i < shown; i++) {
+    const step = steps[i]
+    lines.push(
+      h(
+        Text,
+        { wrap: 'truncate-end' },
+        h(Text, { color: 'subtle' }, `  ${String(i + 1).padStart(3)}  `),
+        h(Text, null, fmt(step.context).padStart(8)),
+        h(Text, { color: growthColor(added[i] / window) }, `  ${signed(added[i]).padStart(7)}`),
+        h(Text, null, `  ${fmt(step.output).padStart(6)}  `),
+        h(Text, { color: step.tools.length ? 'suggestion' : 'subtle' }, step.tools.length ? toolSummary(step.tools) : 'reply'),
+      ),
+    )
+  }
+  if (steps.length > shown) {
+    const biggest = added.indexOf(Math.max(...added))
+    lines.push(h(Text, { color: 'subtle', wrap: 'truncate-end' }, `  … ${steps.length - shown} more · most added: call ${biggest + 1}, ${signed(added[biggest])}`))
+  }
+  return lines.slice(0, budget)
+}
+
+// 5 session: the whole session at a glance.
+function sessionTab(Text, turns, window, width, budget) {
+  const lines = []
+  const add = (rank, node) => lines.push({ rank, node })
+  const layout = { label: 12, value: 8, bar: Math.min(20, Math.max(6, width - 2 - 12 - 8 - 2 - 30)) }
+  const row = (rank, fields) => add(rank, statRow(Text, layout, fields))
+  const legendRow = (rank, parts) => add(rank, h(Text, { wrap: 'truncate-end' }, ' '.repeat(2 + layout.label + layout.value + 1), ...legend(Text, parts)))
+  const sum = key => turns.reduce((n, t) => n + t.usage[key], 0)
+  const calls = sum('calls')
+
+  add(0, h(Text, { wrap: 'truncate-end' }, h(Text, { bold: true }, `${plural(turns.length, 'prompt')} · ${plural(calls, 'API call')}`), h(Text, { color: 'subtle' }, ` · context now ${fmt(data.contextNow)} = ${pct(data.contextNow / window)} of ${fmt(window)}`)))
+
+  // Context after each prompt, as a sparkline; a drop is a compaction.
+  const ends = turns.filter(t => t.complete).map(t => t.atEnd)
+  if (ends.length > 1) {
+    const room = Math.max(8, width - 2 - layout.label - 14)
+    const shownEnds = ends.slice(-room)
+    const peak = Math.max(...shownEnds, 1)
+    const BLOCKS = '▁▂▃▄▅▆▇█'
+    const spark = shownEnds.map(n => BLOCKS[Math.min(7, Math.floor((n / peak) * 7.999))]).join('')
+    add(1, h(Text, { wrap: 'truncate-end' }, h(Text, { color: 'subtle' }, `  ${'context:'.padEnd(layout.label)}`), h(Text, { color: 'suggestion' }, spark), h(Text, { color: 'subtle' }, `  peak ${fmt(peak)}`)))
+  }
+  add(9, h(Text, null, ' '))
+
+  const input = [
+    { label: 'cache read', tokens: sum('cacheRead'), color: 'suggestion' },
+    { label: 'cache write', tokens: sum('cacheWrite'), color: 'warning' },
+    { label: 'uncached', tokens: sum('uncached'), color: 'error' },
+  ]
+  const output = [
+    { label: 'thinking', tokens: sum('thinking'), color: 'autoAccept' },
+    { label: 'text & tool calls', tokens: sum('output') - sum('thinking'), color: 'success' },
+  ]
+  row(0, { label: 'input', value: fmt(sum('input')), strong: true, bars: stackedBar(Text, input, layout.bar) })
+  legendRow(4, input)
+  row(0, { label: 'output', value: fmt(sum('output')), strong: true, bars: stackedBar(Text, output, layout.bar) })
+  legendRow(4.5, output)
+  const sub = turns.filter(t => t.subagents)
+  if (sub.length) {
+    const total = sub.reduce((n, t) => n + t.subagents.input + t.subagents.output, 0)
+    row(3, { label: 'subagents', value: fmt(total), after: [h(Text, { color: 'subtle' }, `  in ${plural(sub.length, 'turn')}, their own contexts`)] })
+  }
+  add(9, h(Text, null, ' '))
+
+  // The prompts that stood out.
+  const done = turns.filter(t => t.complete)
+  const standout = (rank, label, t, value, color) =>
+    t &&
+    add(
+      rank,
+      h(
+        Text,
+        { wrap: 'truncate-end' },
+        h(Text, { color: 'subtle' }, `  ${`${label}:`.padEnd(layout.label + 4)}`),
+        h(Text, { bold: true }, `#${t.number} `),
+        h(Text, { bold: true, color }, value),
+        h(Text, { color: 'subtle', italic: true }, `  ${t.prompt.replace(/\s+/g, ' ').trim()}`),
+      ),
+    )
+  const grewOf = t => t.atEnd - t.before - t.prevOutput
+  const byAdded = done.filter(t => t.before > 0 && t.added >= 0).toSorted((a, b) => b.added - a.added)[0]
+  const byGrowth = done.toSorted((a, b) => grewOf(b) - grewOf(a))[0]
+  const byInput = done.toSorted((a, b) => b.usage.input - a.usage.input)[0]
+  standout(2, 'biggest turn', byGrowth, byGrowth && signed(grewOf(byGrowth)), byGrowth && growthColor(grewOf(byGrowth) / window))
+  standout(2.5, 'most processed', byInput, byInput && `${fmt(byInput.usage.input)} in`, undefined)
+  standout(3.5, 'most sent', byAdded, byAdded && signed(byAdded.added), byAdded && growthColor(byAdded.added / window))
+  if (turns.length) {
+    add(5, h(Text, { color: 'subtle', wrap: 'truncate-end' }, `  ${'per prompt:'.padEnd(layout.label + 4)}${fmt(sum('input') / turns.length)} in · ${fmt(sum('output') / turns.length)} out · ${(calls / turns.length).toFixed(1)} calls`))
+  }
+  return fit(lines, budget)
+}
+
+const TABS = turn => [
+  { id: 'overview', label: 'overview' },
+  { id: 'tokens', label: 'tokens', badge: fmt(turn.promptTokens) },
+  { id: 'context', label: 'context' },
+  { id: 'calls', label: 'calls', badge: turn.complete ? String(turn.usage.calls) : '' },
+  { id: 'session', label: 'session' },
+]
 
 // ── hooks ────────────────────────────────────────────────────────────────────
 
@@ -451,7 +619,7 @@ export function register(on, options) {
       // Without the keyboard the arrows walk the prompt box's history instead;
       // say so plainly. A click on the pane doesn't hand it the keys.
       isFocused
-        ? h(Text, { color: 'subtle', wrap: 'truncate-end' }, '↑↓ pick · esc to type (pane stays)')
+        ? h(Text, { color: 'subtle', wrap: 'truncate-end' }, '↑↓ pick · 1-5 tabs · esc to type (pane stays)')
         : h(Text, { color: 'warning', wrap: 'truncate-end' }, 'list inactive: ctrl+x tab or /pm to browse (↑↓ now scroll your prompt history)'),
       h(Button, { key: 'refresh', label: 'refresh', hotkey: 'r', plain: true, onPress: () => refresh($, env) }),
       h(Button, { key: 'close', label: 'close', hotkey: 'q', plain: true, onPress: () => $.ui.close({ id: PANE }) }),
@@ -467,6 +635,7 @@ export function register(on, options) {
     }
 
     const chosen = await read($, selected)
+    const current = await read($, tab)
     const found = turns.findIndex(t => t.number === chosen)
     const index = found === -1 ? turns.length - 1 : found
     const turn = turns[index]
@@ -520,6 +689,24 @@ export function register(on, options) {
       h(Text, { color: 'subtle' }, below ? `  ↓ ${below} more` : ' '),
     )
 
+    // The details column: the tab bar (2 rows), then the chosen tab.
+    function detailsWithTabs() {
+      const tabs = TABS(turn)
+      const active = tabs.some(t => t.id === current) ? current : 'overview'
+      const room = Math.max(3, detailBudget - 2)
+      const content =
+        active === 'tokens'
+          ? tokensTab(Text, turn, turns.length, detailWidth, room)
+          : active === 'context'
+            ? contextTab(Text, turn, window, detailWidth, room)
+            : active === 'calls'
+              ? callsTab(Text, turn, window, detailWidth, room)
+              : active === 'session'
+                ? sessionTab(Text, turns, window, detailWidth, room)
+                : overviewTab(Text, turn, turns.length, window, detailWidth, room)
+      return [...tabBar(Box, Text, Button, tabs, active, id => update($, tab, () => id), detailWidth), ...content]
+    }
+
     return h(
       Box,
       { flexDirection: 'column' },
@@ -529,7 +716,7 @@ export function register(on, options) {
         Box,
         { flexDirection: wide ? 'row' : 'column', gap: wide ? 3 : 1 },
         list,
-        h(Box, { key: 'details', flexDirection: 'column', flexGrow: 1 }, ...details(Text, turn, turns.length, window, detailWidth, detailBudget)),
+        h(Box, { key: 'details', flexDirection: 'column', flexGrow: 1 }, ...detailsWithTabs()),
       ),
       footer,
     )

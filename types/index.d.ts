@@ -4,6 +4,8 @@ declare module 'claude-code' {
     'prompt-meter': {
       /** Number of the highlighted prompt; 0 follows the newest. */
       selected: number
+      /** The tab the details show: overview, tokens, context, calls or session. */
+      tab: string
     }
   }
 }
