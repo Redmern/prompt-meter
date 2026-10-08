@@ -84,6 +84,7 @@ tokens live in the **typing** line, with how far it would move the context.
 | `Esc` | back to the prompt box (the pane stays open and shows what you type) |
 | `ctrl+x` `tab` | back into the list (a click doesn't give the pane the keys) |
 | `r` | refresh |
+| `s` | on when closed: keep the messages below running after you close the pane |
 | `q` | close |
 
 **On every prompt** (optional): its token split and how it moves the context,
@@ -91,6 +92,11 @@ shown only to you.
 
 **After every turn** (optional): what the turn did to the context and how many
 input and output tokens it used.
+
+These two run while the pane is open. Close it and prompt-meter does nothing:
+its hooks pass straight through, with no node process and no transcript reads.
+Press `s` in the pane to keep the messages running while it is closed; the
+choice is saved across sessions.
 
 **`pm` typed into the prompt box**: the same browser as plain text, for
 terminals where the pane doesn't load: `pm`, `pm 3`, `pm last`, `pm help`.

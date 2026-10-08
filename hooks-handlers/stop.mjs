@@ -3,10 +3,11 @@
 // the token usage Claude Code recorded for each API call in the transcript.
 import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
-import { readTranscript, turns } from "../lib/meter.mjs";
+import { findTranscript, readTranscript, turns } from "../lib/meter.mjs";
 import { turnReport } from "../lib/render.mjs";
 
 const event = JSON.parse(readFileSync(0, "utf8"));
+event.transcript_path ??= findTranscript(event.session_id ?? "");
 
 if (["false", "0"].includes(process.env.CLAUDE_PLUGIN_OPTION_SHOW_AFTER_TURN)) process.exit(0);
 

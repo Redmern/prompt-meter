@@ -1,5 +1,8 @@
 // /pm opens a pane inside Claude Code. It shows a live token split of what you
 // are typing, this session's prompts, and the numbers for the highlighted one.
+// While the pane is closed every hook here passes straight through, unless
+// "stay on when closed" is on; then the per-prompt and per-turn messages run
+// too. Typing the browser word ("pm", "pm 3") always works.
 // Hooks modules can't load node:fs or WASM. So the session numbers come from
 // scripts/pane-data.mjs, run with node, and the token splits come from
 // lib/bpe.mjs, a pure-JS copy of the tokenizer.
@@ -20,7 +23,8 @@ let data // pane-data.mjs output: { window, command, contextNow, turns }
 let failure // why the last load failed
 let tokenizer // undefined until read, null when claude.json is missing
 let draft = '' // the prompt box as of its last edit
-let shown = false // whether the pane is open, so typing only redraws it then
+let shown = false // whether the pane has drawn and not closed: gates the per-keystroke hooks
+let stayOn = false // "stay on when closed", read from $.store at session start
 const splits = new Map() // text → token pieces, for the prompts being redrawn
 
 // ── data ─────────────────────────────────────────────────────────────────────
@@ -44,6 +48,45 @@ async function loadTokenizer($) {
   } catch {
     tokenizer = null // vocabulary missing: counts fall back to an estimate
   }
+}
+
+// The typed browser: "pm", "pm 3", "pm last", "pm help". Only these reach node
+// while the plugin is off, so typing them works any time.
+function isBrowserCommand(prompt, word) {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${escaped}(?:\\s+(?:list|ls|last|help|\\d+))?$`, 'i').test(prompt.trim())
+}
+
+// Runs one of the hooks-handlers scripts with the event on stdin, as Claude
+// Code ran them when they were command hooks, and reads its JSON answer.
+async function runHandler($, script, event, env) {
+  try {
+    const run = await $.process.run(['node', `${$.plugin.root}/hooks-handlers/${script}`], { stdin: JSON.stringify(event), env, timeoutMs: 10000 })
+    return run.exitCode === 0 && run.stdout.trim() ? JSON.parse(run.stdout) : {}
+  } catch {
+    return {}
+  }
+}
+
+// Whether the prompt and turn hooks do anything: the pane is open (as the
+// engine sees it), or "stay on when closed" is on.
+async function isOn($) {
+  if (stayOn) return true
+  return (await $.ui.panes()).some(pane => pane.id === PANE)
+}
+
+// The per-turn message, shown to the person only (a transcript line the model
+// never reads).
+async function turnReport($, event, env) {
+  const out = await runHandler($, 'stop.mjs', event, env)
+  if (out.systemMessage) $.ui.log(out.systemMessage)
+}
+
+async function setStayOn($, value) {
+  stayOn = value
+  await $.store.set('stayOn', value)
+  $.ui.invalidate('ui.render')
+  $.ui.toast(value ? 'prompt-meter stays on when its pane is closed' : 'prompt-meter now runs only while its pane is open')
 }
 
 // Reloads in the background so the turn it hooks never waits on node.
@@ -548,8 +591,32 @@ export function register(on, options) {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'pm', description: 'Browse this session\'s prompts and see what you type split into tokens', immediate: true })
+    stayOn = (await $.store.get('stayOn')) === true
     return next(e)
   })
+
+  // Was a UserPromptSubmit command hook. Runs node only for the typed browser,
+  // or for the token split message while the plugin is on.
+  const word = String(options?.COMMAND || 'pm').trim()
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const browser = isBrowserCommand(e.prompt, word)
+    if (!browser && !(options?.SHOW_ON_SUBMIT !== false && (await isOn($)))) return next(e)
+    const event = { ...e, hook_event_name: 'UserPromptSubmit', session_id: e.session_id ?? (await $.session.id()) }
+    const out = await runHandler($, 'prompt-submit.mjs', event, env)
+    if (out.decision === 'block') return { block: out.reason, suppressOriginalPrompt: true }
+    const result = await next(e)
+    if (out.systemMessage) $.ui.log(out.systemMessage)
+    return result
+  }).catch(($, e, next) => next(e))
+
+  // Was a Stop command hook: the per-turn message, while the plugin is on.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    if (options?.SHOW_AFTER_TURN !== false && (await isOn($))) {
+      void turnReport($, { ...e, hook_event_name: 'Stop', session_id: e.session_id ?? (await $.session.id()) }, env)
+    }
+    return result
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'pm' }, async $ => {
     await Promise.all([load($, env), loadTokenizer($)])
@@ -559,8 +626,9 @@ export function register(on, options) {
     return { text: opened.isPlaced ? 'pane open: ↑↓ pick a prompt · esc to type (live tokens) · ctrl+x tab back · q close' : `pane waits: ${opened.reason}` }
   })
 
-  // What you type, for the live split.
+  // What you type, for the live split; only while the pane is open.
   on('prompt.edit', async ($, e, next) => {
+    if (!shown) return next(e)
     const box = await next(e)
     if (box.text !== draft) {
       draft = box.text
@@ -570,6 +638,7 @@ export function register(on, options) {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
+    if (!shown) return next(e)
     draft = ''
     if (shown) $.ui.invalidate('ui.render')
     return next(e)
@@ -619,9 +688,12 @@ export function register(on, options) {
       // Without the keyboard the arrows walk the prompt box's history instead;
       // say so plainly. A click on the pane doesn't hand it the keys.
       isFocused
-        ? h(Text, { color: 'subtle', wrap: 'truncate-end' }, '↑↓ pick · 1-5 tabs · esc to type (pane stays)')
+        ? h(Text, { color: 'subtle', wrap: 'truncate-end' }, columns >= 100 ? '↑↓ pick · 1-5 tabs · esc to type (pane stays)' : '↑↓ pick · 1-5 tabs')
         : h(Text, { color: 'warning', wrap: 'truncate-end' }, 'list inactive: ctrl+x tab or /pm to browse (↑↓ now scroll your prompt history)'),
       h(Button, { key: 'refresh', label: 'refresh', hotkey: 'r', plain: true, onPress: () => refresh($, env) }),
+      // Off: the plugin does nothing while the pane is closed. On: its
+      // per-prompt and per-turn messages keep running.
+      h(Button, { key: 'stay', label: `on when closed: ${stayOn ? 'on' : 'off'}`, hotkey: 's', plain: true, dimColor: stayOn ? undefined : true, onPress: () => setStayOn($, !stayOn) }),
       h(Button, { key: 'close', label: 'close', hotkey: 'q', plain: true, onPress: () => $.ui.close({ id: PANE }) }),
     )
     const top = [h(Box, { key: 'live', flexDirection: 'column' }, ...live(Text, columns, chipRowCount, isFocused, window)), h(Text, { color: 'subtle' }, '─'.repeat(columns))]

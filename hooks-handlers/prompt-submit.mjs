@@ -5,11 +5,13 @@
 //  - any other prompt: show how it splits into tokens and moves the context.
 // systemMessage is shown to the user only, so the meter adds no tokens itself.
 import { readFileSync } from "node:fs";
-import { contextOf, estimateTokens, parseCommand, readTranscript, turns } from "../lib/meter.mjs";
+import { contextOf, estimateTokens, findTranscript, parseCommand, readTranscript, turns } from "../lib/meter.mjs";
 import { browseDetails, browseHelp, browseList, promptReport } from "../lib/render.mjs";
 
 const event = JSON.parse(readFileSync(0, "utf8"));
 const prompt = event.prompt ?? "";
+// The hooks module hands the event over; it may carry the session id alone.
+event.transcript_path ??= findTranscript(event.session_id ?? "");
 
 function read() {
   try {
