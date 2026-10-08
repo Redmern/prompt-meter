@@ -1,0 +1,55 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "prompt-meter",
+  "version": "0.1.0",
+  "description": "Shows how each prompt changes the context and how many tokens the turn used",
+  "author": {
+    "name": "Redmern",
+    "url": "https://github.com/Redmern"
+  },
+  "homepage": "https://github.com/Redmern/prompt-meter",
+  "repository": "https://github.com/Redmern/prompt-meter",
+  "license": "MIT",
+  "keywords": [
+    "tokens",
+    "context",
+    "tokenizer",
+    "usage",
+    "cost"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "CONTEXT_WINDOW": {
+      "type": "number",
+      "title": "Context window size",
+      "description": "Tokens in your model's context window, used for the % full figure. 1000000 for 1M-context models, 200000 otherwise.",
+      "default": 1000000,
+      "min": 1000
+    },
+    "SHOW_ON_SUBMIT": {
+      "type": "boolean",
+      "title": "Show token split on submit",
+      "description": "When you send a prompt, show how it splits into tokens and how it moves the context window.",
+      "default": true
+    },
+    "SHOW_AFTER_TURN": {
+      "type": "boolean",
+      "title": "Show turn report when Claude finishes",
+      "description": "When Claude finishes answering, show how the turn moved the context and how many input and output tokens it used.",
+      "default": true
+    },
+    "MAX_TOKENS_SHOWN": {
+      "type": "number",
+      "title": "Tokens shown in the split",
+      "description": "How many tokens of your prompt to show split up before summarizing the rest.",
+      "default": 150,
+      "min": 1
+    },
+    "COMMAND": {
+      "type": "string",
+      "title": "Browser command",
+      "description": "Word that opens the in-session prompt browser: <word>, <word> <number>, <word> last, <word> help.",
+      "default": "pm"
+    }
+  }
+}
