@@ -43,9 +43,12 @@ add␣a␣retry␣with␣backoff␣to␣the␣upload␣client
 In Claude Code:
 
 ```
-/plugin marketplace add Redmern/prompt-meter
-/plugin install prompt-meter@prompt-meter
+/plugin marketplace add Redmern/claude-plugins
+/plugin install prompt-meter@redmern
 ```
+
+It comes from the [redmern marketplace](https://github.com/Redmern/claude-plugins),
+which also has [prompt-analyzer](https://github.com/Redmern/prompt-analyzer) (`/pa`).
 
 Needs **Node.js 20 or newer** on your `PATH` (the hooks run with `node`) and
 Claude Code **2.1.294 or newer** for the `/pm` pane. Nothing to `npm install`.
@@ -98,7 +101,7 @@ session, from any shell.
 
 ## Settings
 
-`/plugin configure prompt-meter@prompt-meter`, or `/plugin` → prompt-meter:
+`/plugin configure prompt-meter@redmern`, or `/plugin` → prompt-meter:
 
 | Option | Default | |
 | --- | --- | --- |
